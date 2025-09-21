@@ -155,19 +155,16 @@ class AudioLoop:
                 continue
             turn = self.session.receive()
             async for response in turn:
-                # Handle audio data if present
                 if data := response.data:
                     self.audio_in_queue.put_nowait(data)
                     self.received_audio.append(data)
 
-                # FIX: Safely check if the 'parts' attribute exists before trying to loop
                 if hasattr(response, 'parts'):
                     for part in response.parts:
                         if part.text:
                             print(part.text, end="")
                             self.received_texts.append(part.text)
                         elif part.tool_call:
-                            # This will print if the model uses a tool like Google Search
                             print(f"\n[Tool Call: {part.tool_call.name}]")
 
     async def play_audio(self):
@@ -210,35 +207,24 @@ class AudioLoop:
             self._cleanup()
 
     def stop(self):
-        """Gracefully stop audio/video/session without killing Flask"""
         self.running = False
         for task in list(self.tasks):
             if not task.done():
                 task.cancel()
         self.tasks.clear()
-        # self._cleanup() was REMOVED from here to prevent a race condition.
-        # The finally block in the run() method now handles all cleanup safely.
         print("✅ AudioLoop stop signal sent")
 
     def _cleanup(self):
-        """Release resources safely (sync now)"""
         try:
-            # ✅ FIXED: Removed redundant and incorrect self.session.close() call
-            # The 'async with' block in run() handles this correctly.
             self.session = None
-
             if self.audio_stream:
-                try:
-                    self.audio_stream.close()
-                except Exception:
-                    pass
+                try: self.audio_stream.close()
+                except Exception: pass
                 self.audio_stream = None
 
             if self.playback_stream:
-                try:
-                    self.playback_stream.close()
-                except Exception:
-                    pass
+                try: self.playback_stream.close()
+                except Exception: pass
                 self.playback_stream = None
         except Exception as e:
             print(f"⚠️ Cleanup error: {e}")

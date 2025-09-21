@@ -77,7 +77,6 @@ def pause_session():
     if loop_thread and loop_thread.is_alive():
         loop_thread.join(timeout=5)
     
-    # === FIX: Release the camera resource on pause ===
     if cap:
         print("Releasing camera on pause...")
         cap.release()
@@ -93,7 +92,6 @@ def resume_session():
     if status != "paused":
         return jsonify({"status": "error", "message": "No paused session to resume"}), 400
 
-    # === FIX: Re-initialize the camera on resume ===
     if mode == "camera":
         print("Re-initializing camera on resume...")
         cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -125,7 +123,6 @@ def stop_session():
             print("Releasing camera...")
             cap.release()
         
-        # Reset all global state variables
         audio_loop_instance = None
         loop_thread = None
         cap = None

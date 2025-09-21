@@ -1,9 +1,6 @@
-# For Streamlit (ui.py)
 streamlit
 requests
 pillow
-
-# For Flask & Gemini (app.py, live.py)
 flask
 google-genai
 opencv-python

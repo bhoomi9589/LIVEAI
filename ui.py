@@ -103,9 +103,6 @@ if status_value == "running" and mode_value in ["camera", "screen"]:
         if frame_response and hasattr(frame_response, 'status_code') and frame_response.status_code == 200:
             try:
                 img = Image.open(io.BytesIO(frame_response.content))
-                # =================================================================
-                # FINAL FIX: Changed to width='stretch' as per the latest warning
-                # =================================================================
                 image_placeholder.image(img, caption="Live Feed", width='stretch')
             except Exception as e:
                 st.error(f"Failed to decode image: {e}")
