@@ -8,6 +8,9 @@ from live import GeminiLive
 
 load_dotenv()
 
+# Module-level queue for thread-safe communication (not in session_state!)
+MESSAGE_QUEUE = queue.Queue()
+
 # Initialize session state
 if 'gemini_live' not in st.session_state:
     try:
@@ -22,14 +25,11 @@ if 'transcript' not in st.session_state:
 if 'session_thread' not in st.session_state:
     st.session_state.session_thread = None
 
-if 'message_queue' not in st.session_state:
-    st.session_state.message_queue = queue.Queue()
-
-# Callback to update UI (thread-safe with queue)
+# Callback to update UI (thread-safe with module-level queue)
 def ui_update_callback(event_type, data):
     """Update UI with Gemini responses - thread-safe"""
     try:
-        st.session_state.message_queue.put((event_type, data))
+        MESSAGE_QUEUE.put((event_type, data))
     except Exception as e:
         print(f"Error adding message to queue: {e}")
 
@@ -37,8 +37,8 @@ def ui_update_callback(event_type, data):
 def process_messages():
     """Process all messages from the queue"""
     try:
-        while not st.session_state.message_queue.empty():
-            event_type, data = st.session_state.message_queue.get_nowait()
+        while not MESSAGE_QUEUE.empty():
+            event_type, data = MESSAGE_QUEUE.get_nowait()
             
             if event_type == "error":
                 st.session_state.transcript.append(f"❌ **Error:** {data}")
@@ -80,9 +80,9 @@ def stop_session():
         asyncio.run(st.session_state.gemini_live.stop_session())
         st.session_state.transcript = []
         st.session_state.session_thread = None
-        # Clear the message queue
-        while not st.session_state.message_queue.empty():
-            st.session_state.message_queue.get()
+        # Clear the module-level message queue
+        while not MESSAGE_QUEUE.empty():
+            MESSAGE_QUEUE.get()
 
 def pause_session():
     """Pause Gemini Live session"""
