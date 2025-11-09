@@ -43,6 +43,14 @@ def stop_session_callback():
     # Clear the transcript when the session stops
     st.session_state.transcript = []
 
+def pause_session_callback():
+    """Called when the 'Pause Session' button is clicked."""
+    st.session_state.gemini_live.pause_session()
+
+def resume_session_callback():
+    """Called when the 'Resume Session' button is clicked."""
+    st.session_state.gemini_live.resume_session()
+
 def ui_update_callback(event_type, data):
     """
     This function is passed to the backend to allow it to update the UI's state.
@@ -69,8 +77,11 @@ if st.session_state.get('rerun_needed', False):
 draw_interface(
     start_session_callback=start_session_callback,
     stop_session_callback=stop_session_callback,
+    pause_session_callback=pause_session_callback,
+    resume_session_callback=resume_session_callback,
     video_frame_callback=st.session_state.gemini_live.send_video_frame,
     audio_frame_callback=st.session_state.gemini_live.send_audio_frame,
     is_running=st.session_state.gemini_live.running,
+    is_paused=st.session_state.gemini_live.paused,
     transcript=st.session_state.transcript
 )

@@ -46,6 +46,7 @@ class GeminiLive:
         self.session = None
         self.session_context = None
         self.running = False
+        self.paused = False
         self.receive_task = None
         self.ui_callback = None
 
@@ -122,6 +123,7 @@ class GeminiLive:
         """Stops the current Gemini LiveConnect session."""
         print("🛑 stop_session() called")
         self.running = False
+        self.paused = False
         
         # Cancel the receive task if it's running
         if self.receive_task and not self.receive_task.done():
@@ -142,9 +144,25 @@ class GeminiLive:
         self.receive_task = None
         print("🛑 Gemini session stopped.")
 
+    def pause_session(self):
+        """Pauses the current session (stops sending frames but keeps connection alive)."""
+        if self.running and not self.paused:
+            self.paused = True
+            print("⏸️ Session paused")
+            return True
+        return False
+
+    def resume_session(self):
+        """Resumes a paused session."""
+        if self.running and self.paused:
+            self.paused = False
+            print("▶️ Session resumed")
+            return True
+        return False
+
     async def send_audio_frame(self, frame: av.AudioFrame):
         """Processes and sends an audio frame from WebRTC to Gemini."""
-        if not self.running or not self.session:
+        if not self.running or not self.session or self.paused:
             return
         audio_data = frame.to_ndarray().tobytes()
         try:
@@ -156,7 +174,7 @@ class GeminiLive:
 
     async def send_video_frame(self, frame: av.VideoFrame):
         """Processes and sends a video frame from WebRTC to Gemini."""
-        if not self.running or not self.session:
+        if not self.running or not self.session or self.paused:
             return
 
         img = frame.to_image()

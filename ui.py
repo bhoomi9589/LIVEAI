@@ -5,9 +5,12 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 def draw_interface(
     start_session_callback,
     stop_session_callback,
+    pause_session_callback,
+    resume_session_callback,
     video_frame_callback,
     audio_frame_callback,
     is_running,
+    is_paused,
     transcript
 ):
     """
@@ -54,12 +57,31 @@ def draw_interface(
     with col2:
         st.subheader("Controls & Transcript")
 
+        # Session control buttons
         if not is_running:
             if st.button("🚀 Start Session", on_click=start_session_callback, use_container_width=True):
                 st.rerun()
         else:
-            if st.button("🛑 Stop Session", on_click=stop_session_callback, use_container_width=True):
-                st.rerun()
+            # Create two columns for pause/resume and stop
+            btn_col1, btn_col2 = st.columns(2)
+            
+            with btn_col1:
+                if is_paused:
+                    if st.button("▶️ Resume", on_click=resume_session_callback, use_container_width=True):
+                        st.rerun()
+                else:
+                    if st.button("⏸️ Pause", on_click=pause_session_callback, use_container_width=True):
+                        st.rerun()
+            
+            with btn_col2:
+                if st.button("🛑 Stop", on_click=stop_session_callback, use_container_width=True):
+                    st.rerun()
+            
+            # Show session status
+            if is_paused:
+                st.warning("⏸️ Session paused - Click Resume to continue")
+            else:
+                st.success("✅ Session active - Speak to Gemini!")
 
         st.markdown("---")
         
