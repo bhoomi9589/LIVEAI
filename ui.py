@@ -24,14 +24,17 @@ def draw_interface(
     
     # Add info banner for Streamlit Cloud
     st.info("💡 **Tip:** Allow camera and microphone permissions when prompted to start chatting with Gemini!")
+    
+    # Auto-refresh every 0.5 seconds when camera is active to update video display
+    if latest_frame is not None:
+        import time
+        time.sleep(0.1)
+        st.rerun()
 
     col1, col2 = st.columns([0.6, 0.4])
 
     with col1:
         st.subheader("Live Camera Feed")
-        
-        # Create a placeholder for the video
-        video_placeholder = st.empty()
         
         try:
             webrtc_ctx = webrtc_streamer(
@@ -46,17 +49,20 @@ def draw_interface(
                 async_processing=True,
             )
             
-            # Display the captured frame if available
-            if latest_frame is not None:
-                video_placeholder.image(latest_frame, channels="BGR", use_container_width=True)
-            
+            # Show status messages
             if webrtc_ctx.state.playing:
                 st.success("🎥 Camera and microphone active - Streaming to Gemini")
+                
+                # Display the captured frame below the status
+                if latest_frame is not None:
+                    st.image(latest_frame, channels="BGR", use_container_width=True, caption="Live Camera Feed")
+                else:
+                    st.info("📹 Waiting for camera frames...")
+                    
             elif webrtc_ctx.state.signalling:
                 st.warning("⏳ Connecting to camera...")
             else:
-                st.info("📷 Click 'START' in the WebRTC component above to activate camera and microphone")
-                video_placeholder.info("📹 Your camera feed will appear here once started")
+                st.info("📷 Click 'START' button above to activate camera and microphone")
                 
         except Exception as e:
             st.error(f"❌ WebRTC Error: {str(e)}")
