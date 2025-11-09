@@ -32,7 +32,7 @@ def draw_interface(
         try:
             webrtc_ctx = webrtc_streamer(
                 key="live-assistant",
-                mode=WebRtcMode.SENDRECV, # Send and receive to display video feed
+                mode=WebRtcMode.SENDONLY,  # We only send media to the server
                 rtc_configuration=RTCConfiguration(
                     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
                 ),
@@ -40,7 +40,14 @@ def draw_interface(
                 video_frame_callback=video_frame_callback,
                 audio_frame_callback=audio_frame_callback,
                 async_processing=True,
-                video_html_attrs={"style": {"width": "100%", "height": "auto", "border-radius": "10px"}},
+                # These settings ensure the video preview is shown
+                sendback_audio=False,
+                video_html_attrs={
+                    "style": {"width": "100%", "max-width": "640px", "border-radius": "10px"},
+                    "autoPlay": True,
+                    "controls": False,
+                    "muted": True,
+                },
             )
             
             if webrtc_ctx.state.playing:
