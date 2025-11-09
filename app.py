@@ -1,14 +1,13 @@
 # app.py - Streamlit UI for Gemini Live Assistant (Flask Backend)
 import streamlit as st
-import requests
-import base64
-import io
 import time
+import io
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-from PIL import Image
+from live import FlaskClient
 
-# Flask server URL
-FLASK_URL = "http://localhost:5000"
+# Initialize Flask client
+if 'flask_client' not in st.session_state:
+    st.session_state.flask_client = FlaskClient()
 
 # Initialize session state
 if 'transcript' not in st.session_state:
@@ -23,8 +22,12 @@ st.set_page_config(page_title="Gemini Live Assistant", page_icon="🤖", layout=
 st.title("🤖 Gemini Live Assistant")
 st.caption("Flask backend + Streamlit UI with browser camera/microphone")
 
-# Info banner
-st.info("💡 **Tip:** Start Flask server first: `python flask_server.py`, then allow camera/mic permissions!")
+# Check Flask server connection
+if not st.session_state.flask_client.check_connection():
+    st.error("❌ Flask server not running! Start it with: `python flask_server.py`")
+    st.stop()
+else:
+    st.success("✅ Connected to Flask backend")
 
 # Layout
 col1, col2 = st.columns([0.6, 0.4])
@@ -34,14 +37,14 @@ def video_callback(frame):
     """Send video frames to Flask server"""
     if st.session_state.is_running and not st.session_state.is_paused:
         try:
-            # Convert frame to JPEG
+            # Convert frame to JPEG bytes
             img = frame.to_image()
             img_byte_arr = io.BytesIO()
             img.save(img_byte_arr, format='JPEG', quality=70)
-            img_base64 = base64.b64encode(img_byte_arr.getvalue()).decode()
+            image_data = img_byte_arr.getvalue()
             
             # Send to Flask
-            requests.post(f"{FLASK_URL}/video", json={"image": img_base64}, timeout=0.1)
+            st.session_state.flask_client.send_video(image_data)
         except:
             pass
     return frame
@@ -52,16 +55,15 @@ def audio_callback(frame):
     if st.session_state.is_running and not st.session_state.is_paused:
         try:
             audio_data = frame.to_ndarray().tobytes()
-            audio_base64 = base64.b64encode(audio_data).decode()
             
             # Send to Flask
-            requests.post(f"{FLASK_URL}/audio", json={"audio": audio_base64}, timeout=0.1)
+            st.session_state.flask_client.send_audio(audio_data)
         except:
             pass
     return frame
 
 with col1:
-    st.subheader("Live Camera Feed")
+    st.subheader("📹 Live Camera Feed")
     
     # WebRTC streamer with browser camera
     webrtc_ctx = webrtc_streamer(
@@ -82,37 +84,36 @@ with col1:
         st.info("📷 Click START above to activate camera and microphone")
 
 with col2:
-    st.subheader("Controls & Transcript")
+    st.subheader("🎛️ Controls & Transcript")
     
     # Session controls
     if not st.session_state.is_running:
         if st.button("🚀 Start Session", use_container_width=True):
-            try:
-                response = requests.post(f"{FLASK_URL}/start", timeout=5)
-                if response.json().get("status") == "started":
-                    st.session_state.is_running = True
-                    st.success("Session started!")
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}. Make sure Flask server is running!")
+            result = st.session_state.flask_client.start_session()
+            if result.get("status") == "started":
+                st.session_state.is_running = True
+                st.success("✅ Session started!")
+                st.rerun()
+            else:
+                st.error(f"❌ Error: {result.get('message', 'Unknown error')}")
     else:
         btn_col1, btn_col2 = st.columns(2)
         
         with btn_col1:
             if st.session_state.is_paused:
                 if st.button("▶️ Resume", use_container_width=True):
-                    requests.post(f"{FLASK_URL}/resume")
+                    st.session_state.flask_client.resume_session()
                     st.session_state.is_paused = False
                     st.rerun()
             else:
                 if st.button("⏸️ Pause", use_container_width=True):
-                    requests.post(f"{FLASK_URL}/pause")
+                    st.session_state.flask_client.pause_session()
                     st.session_state.is_paused = True
                     st.rerun()
         
         with btn_col2:
             if st.button("🛑 Stop", use_container_width=True):
-                requests.post(f"{FLASK_URL}/stop")
+                st.session_state.flask_client.stop_session()
                 st.session_state.is_running = False
                 st.session_state.is_paused = False
                 st.session_state.transcript = []
@@ -120,29 +121,25 @@ with col2:
         
         # Status
         if st.session_state.is_paused:
-            st.warning("⏸️ Session paused")
+            st.warning("⏸️ Session paused - Click Resume to continue")
         else:
-            st.success("✅ Session active")
+            st.success("✅ Session active - Speak to Gemini!")
     
     st.markdown("---")
     
     # Transcript display
-    st.write("**Conversation:**")
+    st.write("**💬 Conversation:**")
     
     # Fetch transcript from Flask
     if st.session_state.is_running:
-        try:
-            response = requests.get(f"{FLASK_URL}/transcript", timeout=1)
-            transcript = response.json().get("transcript", [])
-            st.session_state.transcript = transcript
-        except:
-            pass
+        transcript = st.session_state.flask_client.get_transcript()
+        st.session_state.transcript = transcript
     
     if st.session_state.transcript:
         for entry in st.session_state.transcript:
             st.markdown(entry)
     else:
-        st.info("💬 Start a session and speak to see the conversation!")
+        st.info("� Start a session and speak to see the conversation here!")
     
     # Auto-refresh when running
     if st.session_state.is_running:
