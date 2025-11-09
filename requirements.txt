@@ -1,6 +1,7 @@
 google-genai
 streamlit
-streamlit-webrtc
-av
 pillow
 python-dotenv
+pyaudio
+opencv-python
+numpy

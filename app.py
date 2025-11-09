@@ -1,13 +1,13 @@
-# app.py - Streamlit UI with Direct Gemini Connection
+# app.py - Streamlit UI with PyAudio System Audio
 import streamlit as st
-import asyncio
+import threading
+import time
 from dotenv import load_dotenv
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 from live import GeminiLive
 
 load_dotenv()
 
-# Initialize GeminiLive
+# Initialize session state
 if 'gemini_live' not in st.session_state:
     try:
         st.session_state.gemini_live = GeminiLive()
@@ -15,108 +15,107 @@ if 'gemini_live' not in st.session_state:
         st.error(str(e))
         st.stop()
 
-# Initialize paused attribute for backward compatibility
-if not hasattr(st.session_state.gemini_live, 'paused'):
-    st.session_state.gemini_live.paused = False
-
-# Initialize session state
 if 'transcript' not in st.session_state:
     st.session_state.transcript = []
 
-# Callback functions
-def start_session_callback():
-    """Start Gemini session"""
-    if not st.session_state.gemini_live.ui_callback:
-        st.session_state.gemini_live.receive_responses(ui_update_callback)
-    asyncio.run(st.session_state.gemini_live.start_session())
+if 'session_thread' not in st.session_state:
+    st.session_state.session_thread = None
 
-def stop_session_callback():
-    """Stop Gemini session"""
-    asyncio.run(st.session_state.gemini_live.stop_session())
-    st.session_state.transcript = []
-
-def pause_session_callback():
-    """Pause Gemini session"""
-    if hasattr(st.session_state.gemini_live, 'pause_session'):
-        st.session_state.gemini_live.pause_session()
-    else:
-        st.session_state.gemini_live.paused = True
-
-def resume_session_callback():
-    """Resume Gemini session"""
-    if hasattr(st.session_state.gemini_live, 'resume_session'):
-        st.session_state.gemini_live.resume_session()
-    else:
-        st.session_state.gemini_live.paused = False
-
+# Callback to update UI
 def ui_update_callback(event_type, data):
     """Update UI with Gemini responses"""
     if event_type == "error":
-        st.error(data)
+        st.session_state.transcript.append(f"❌ **Error:** {data}")
     elif event_type == "text":
         st.session_state.transcript.append(f"**🤖 Gemini:** {data}")
     elif event_type == "tool":
-        st.session_state.transcript.append(f"*{data}*")
-    
-    if 'rerun_needed' not in st.session_state:
-        st.session_state.rerun_needed = True
+        st.session_state.transcript.append(f"*🔧 {data}*")
 
-# Check if rerun needed
-if st.session_state.get('rerun_needed', False):
-    st.session_state.rerun_needed = False
-    st.rerun()
+# Session control functions
+def start_session():
+    """Start Gemini Live session in background thread"""
+    def run_session():
+        st.session_state.gemini_live.ui_callback = ui_update_callback
+        import asyncio
+        asyncio.run(st.session_state.gemini_live.start_session())
+    
+    if not st.session_state.gemini_live.running:
+        st.session_state.session_thread = threading.Thread(target=run_session, daemon=True)
+        st.session_state.session_thread.start()
+        time.sleep(0.5)  # Give it time to start
+
+def stop_session():
+    """Stop Gemini Live session"""
+    if st.session_state.gemini_live.running:
+        import asyncio
+        asyncio.run(st.session_state.gemini_live.stop_session())
+        st.session_state.transcript = []
+        st.session_state.session_thread = None
+
+def pause_session():
+    """Pause Gemini Live session"""
+    st.session_state.gemini_live.pause_session()
+
+def resume_session():
+    """Resume Gemini Live session"""
+    st.session_state.gemini_live.resume_session()
 
 # Page config
 st.set_page_config(page_title="Gemini Live Assistant", page_icon="🤖", layout="wide")
 st.title("🤖 Gemini Live Assistant")
-st.caption("Real-time multimodal AI with browser camera/microphone")
+st.caption("Real-time multimodal AI with system audio and camera")
 
-st.info("💡 **Tip:** Allow camera and microphone permissions to start chatting with Gemini!")
+st.info("💡 **System Audio Capture:** This app uses PyAudio to capture system microphone and camera feed.")
 
 # Layout
 col1, col2 = st.columns([0.6, 0.4])
 
 with col1:
-    st.subheader("📹 Live Camera Feed")
+    st.subheader("📹 Camera Feed Status")
     
-    # WebRTC streamer
-    webrtc_ctx = webrtc_streamer(
-        key="gemini-live",
-        mode=WebRtcMode.SENDONLY,
-        rtc_configuration=RTCConfiguration(
-            {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-        ),
-        media_stream_constraints={"video": True, "audio": True},
-        video_frame_callback=st.session_state.gemini_live.send_video_frame,
-        audio_frame_callback=st.session_state.gemini_live.send_audio_frame,
-        async_processing=True,
-    )
-    
-    if webrtc_ctx.state.playing:
-        st.success("🎥 Camera and microphone active")
+    # Display camera status
+    if st.session_state.gemini_live.running:
+        if st.session_state.gemini_live.camera_running:
+            st.success("🎥 Camera is active and capturing frames")
+            st.info("🎤 Microphone is active and capturing audio (16kHz)")
+        else:
+            st.warning("📷 Camera initialization in progress...")
     else:
-        st.info("📷 Click START above to activate camera and microphone")
+        st.info("📷 Click 'Start Session' to activate camera and microphone")
+    
+    # Camera placeholder
+    camera_placeholder = st.empty()
+    
+    # Show latest frame if available
+    if st.session_state.gemini_live.running and hasattr(st.session_state.gemini_live, 'latest_frame'):
+        if st.session_state.gemini_live.latest_frame is not None:
+            camera_placeholder.image(st.session_state.gemini_live.latest_frame, caption="Live Camera Feed", use_container_width=True)
 
 with col2:
     st.subheader("🎛️ Controls & Transcript")
     
     # Session controls
     if not st.session_state.gemini_live.running:
-        if st.button("🚀 Start Session", on_click=start_session_callback, use_container_width=True):
+        if st.button("🚀 Start Session", use_container_width=True):
+            start_session()
+            time.sleep(1)
             st.rerun()
     else:
         btn_col1, btn_col2 = st.columns(2)
         
         with btn_col1:
             if st.session_state.gemini_live.paused:
-                if st.button("▶️ Resume", on_click=resume_session_callback, use_container_width=True):
+                if st.button("▶️ Resume", use_container_width=True):
+                    resume_session()
                     st.rerun()
             else:
-                if st.button("⏸️ Pause", on_click=pause_session_callback, use_container_width=True):
+                if st.button("⏸️ Pause", use_container_width=True):
+                    pause_session()
                     st.rerun()
         
         with btn_col2:
-            if st.button("🛑 Stop", on_click=stop_session_callback, use_container_width=True):
+            if st.button("🛑 Stop", use_container_width=True):
+                stop_session()
                 st.rerun()
         
         # Status
@@ -130,8 +129,15 @@ with col2:
     # Transcript display
     st.write("**💬 Conversation:**")
     
-    if st.session_state.transcript:
-        for entry in st.session_state.transcript:
-            st.markdown(entry)
-    else:
-        st.info("💭 Start a session and speak to see the conversation here!")
+    transcript_container = st.container()
+    with transcript_container:
+        if st.session_state.transcript:
+            for entry in st.session_state.transcript[-20:]:  # Show last 20 messages
+                st.markdown(entry)
+        else:
+            st.info("💭 Start a session and speak to see the conversation here!")
+
+# Auto-refresh while session is running
+if st.session_state.gemini_live.running:
+    time.sleep(0.5)
+    st.rerun()

@@ -1,14 +1,16 @@
-# live.py - Gemini Live Backend Logic (No Flask)
+# live.py - Gemini Live Backend with PyAudio
 import os
 import asyncio
 import io
+import pyaudio
+import numpy as np
+from PIL import Image
 from google import genai
 from google.genai import types
 
 class GeminiLive:
     """
-    Manages Gemini Live session directly in Streamlit.
-    No Flask server needed - browser camera sends directly to Gemini.
+    Manages Gemini Live session with PyAudio for system audio capture.
     """
     def __init__(self):
         # Get API key
@@ -42,6 +44,17 @@ class GeminiLive:
         self.paused = False
         self.receive_task = None
         self.ui_callback = None
+        
+        # PyAudio setup
+        self.audio = pyaudio.PyAudio()
+        self.audio_stream = None
+        self.audio_task = None
+        
+        # Camera setup
+        self.camera = None
+        self.camera_running = False
+        self.latest_frame = None
+        self.camera_task = None
 
     async def start_session(self):
         """Start Gemini Live session"""
@@ -54,6 +67,96 @@ class GeminiLive:
         if self.ui_callback:
             self.receive_task = asyncio.create_task(self._receive_loop())
             print("🎧 Started receive loop")
+        
+        # Start PyAudio capture
+        self.start_audio_capture()
+        
+        # Start camera capture
+        self.start_camera_capture()
+
+    def start_audio_capture(self):
+        """Start capturing audio from microphone using PyAudio"""
+        try:
+            self.audio_stream = self.audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=16000,
+                input=True,
+                frames_per_buffer=1024,
+                stream_callback=self._audio_callback
+            )
+            self.audio_stream.start_stream()
+            print("🎤 PyAudio microphone started")
+        except Exception as e:
+            print(f"❌ PyAudio error: {e}")
+
+    def _audio_callback(self, in_data, frame_count, time_info, status):
+        """PyAudio callback - sends audio to Gemini"""
+        if self.running and self.session and not self.paused:
+            try:
+                # Send audio data to Gemini
+                asyncio.run_coroutine_threadsafe(
+                    self.session.send_realtime_input(
+                        media=types.Blob(data=in_data, mime_type="audio/pcm")
+                    ),
+                    asyncio.get_event_loop()
+                )
+            except Exception as e:
+                print(f"Error sending audio: {e}")
+        return (in_data, pyaudio.paContinue)
+
+    def start_camera_capture(self):
+        """Start capturing frames from camera using OpenCV"""
+        try:
+            import cv2
+            self.camera = cv2.VideoCapture(0)
+            if self.camera.isOpened():
+                self.camera_running = True
+                print("📷 Camera started")
+                # Start camera loop in background
+                import threading
+                threading.Thread(target=self._camera_loop, daemon=True).start()
+            else:
+                print("❌ Failed to open camera")
+        except Exception as e:
+            print(f"❌ Camera error: {e}")
+    
+    def _camera_loop(self):
+        """Continuously capture and send camera frames"""
+        import cv2
+        while self.running and self.camera_running:
+            if self.paused:
+                continue
+            
+            try:
+                ret, frame = self.camera.read()
+                if ret:
+                    # Store latest frame for UI display
+                    self.latest_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    
+                    # Send frame to Gemini every 1 second (adjust as needed)
+                    if self.session:
+                        # Resize for efficiency
+                        small_frame = cv2.resize(frame, (640, 480))
+                        _, buffer = cv2.imencode('.jpg', small_frame)
+                        
+                        # Send to Gemini
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                self.session.send_realtime_input(
+                                    media=types.Blob(data=buffer.tobytes(), mime_type="image/jpeg")
+                                ),
+                                asyncio.get_event_loop()
+                            )
+                        except Exception as e:
+                            print(f"Error sending frame: {e}")
+                
+                # Throttle to ~1 fps for camera
+                import time
+                time.sleep(1.0)
+            except Exception as e:
+                print(f"Camera capture error: {e}")
+                break
 
     async def _receive_loop(self):
         """Listen for Gemini responses"""
@@ -103,6 +206,21 @@ class GeminiLive:
         self.running = False
         self.paused = False
         
+        # Stop camera
+        if self.camera:
+            self.camera_running = False
+            self.camera.release()
+            self.camera = None
+            self.latest_frame = None
+            print("📷 Camera stopped")
+        
+        # Stop PyAudio
+        if self.audio_stream:
+            self.audio_stream.stop_stream()
+            self.audio_stream.close()
+            self.audio_stream = None
+            print("🎤 PyAudio stopped")
+        
         if self.receive_task and not self.receive_task.done():
             self.receive_task.cancel()
             try:
@@ -137,30 +255,13 @@ class GeminiLive:
             return True
         return False
 
-    async def send_audio_frame(self, frame):
-        """Send audio frame to Gemini"""
+    async def send_video_frame(self, frame_data):
+        """Send video frame to Gemini (for webcam if needed)"""
         if not self.running or not self.session or self.paused:
             return
         try:
-            audio_data = frame.to_ndarray().tobytes()
             await self.session.send_realtime_input(
-                media=types.Blob(data=audio_data, mime_type="audio/pcm")
-            )
-        except Exception as e:
-            print(f"Error sending audio: {e}")
-
-    async def send_video_frame(self, frame):
-        """Send video frame to Gemini"""
-        if not self.running or not self.session or self.paused:
-            return
-        try:
-            img = frame.to_image()
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=70)
-            image_data = img_byte_arr.getvalue()
-            
-            await self.session.send_realtime_input(
-                media=types.Blob(data=image_data, mime_type="image/jpeg")
+                media=types.Blob(data=frame_data, mime_type="image/jpeg")
             )
         except Exception as e:
             print(f"Error sending video: {e}")
@@ -169,4 +270,9 @@ class GeminiLive:
         """Set UI callback for responses"""
         self.ui_callback = ui_callback
         print("✅ UI callback registered")
+    
+    def __del__(self):
+        """Cleanup PyAudio on deletion"""
+        if hasattr(self, 'audio'):
+            self.audio.terminate()
 
