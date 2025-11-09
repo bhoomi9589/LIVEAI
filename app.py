@@ -21,6 +21,10 @@ if 'gemini_live' not in st.session_state:
         st.error(str(e))
         st.stop()
 
+# Initialize paused attribute if it doesn't exist (for backwards compatibility)
+if not hasattr(st.session_state.gemini_live, 'paused'):
+    st.session_state.gemini_live.paused = False
+
 if 'transcript' not in st.session_state:
     st.session_state.transcript = []
 
