@@ -76,10 +76,34 @@ def start_session():
 def stop_session():
     """Stop Gemini Live session"""
     if st.session_state.gemini_live.running:
-        import asyncio
-        asyncio.run(st.session_state.gemini_live.stop_session())
+        # Mark as not running first
+        st.session_state.gemini_live.running = False
+        st.session_state.gemini_live.paused = False
+        
+        # Give threads time to notice the stop
+        time.sleep(0.5)
+        
+        # Clean up resources synchronously
+        if st.session_state.gemini_live.camera:
+            st.session_state.gemini_live.camera_running = False
+            try:
+                st.session_state.gemini_live.camera.release()
+                st.session_state.gemini_live.camera = None
+            except:
+                pass
+        
+        if st.session_state.gemini_live.audio_stream:
+            try:
+                st.session_state.gemini_live.audio_stream.stop_stream()
+                st.session_state.gemini_live.audio_stream.close()
+                st.session_state.gemini_live.audio_stream = None
+            except:
+                pass
+        
+        st.session_state.gemini_live.latest_frame = None
         st.session_state.transcript = []
         st.session_state.session_thread = None
+        
         # Clear the module-level message queue
         while not MESSAGE_QUEUE.empty():
             MESSAGE_QUEUE.get()

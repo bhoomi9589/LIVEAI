@@ -69,22 +69,36 @@ class GeminiLive:
 
     async def start_session(self):
         """Start Gemini Live session"""
-        print("✅ Starting Gemini session...")
-        self.running = True
-        self.event_loop = asyncio.get_event_loop()  # Store the event loop
-        self.session_context = self.client.aio.live.connect(model=self.model, config=self.config)
-        self.session = await self.session_context.__aenter__()
-        print("✅ Session connected!")
-        
-        if self.ui_callback:
-            self.receive_task = asyncio.create_task(self._receive_loop())
-            print("🎧 Started receive loop")
-        
-        # Start PyAudio capture
-        self.start_audio_capture()
-        
-        # Start camera capture
-        self.start_camera_capture()
+        try:
+            print("✅ Starting Gemini session...")
+            self.running = True
+            self.event_loop = asyncio.get_event_loop()  # Store the event loop
+            
+            print("🔌 Connecting to Gemini Live API...")
+            self.session_context = self.client.aio.live.connect(model=self.model, config=self.config)
+            self.session = await self.session_context.__aenter__()
+            print("✅ Session connected!")
+            
+            if self.ui_callback:
+                self.receive_task = asyncio.create_task(self._receive_loop())
+                print("🎧 Started receive loop")
+            
+            # Start PyAudio capture
+            self.start_audio_capture()
+            
+            # Start camera capture
+            self.start_camera_capture()
+            
+            # Keep session alive
+            while self.running:
+                await asyncio.sleep(1)
+            
+        except Exception as e:
+            print(f"❌ Session start error: {e}")
+            if self.ui_callback:
+                self.ui_callback("error", f"Failed to start session: {e}")
+            self.running = False
+            raise
 
     def start_audio_capture(self):
         """Start capturing audio from microphone using PyAudio"""
@@ -123,36 +137,44 @@ class GeminiLive:
 
     def start_camera_capture(self):
         """Start capturing frames from camera using OpenCV"""
-        try:
-            import cv2
-            self.camera = cv2.VideoCapture(0)
-            
-            # Give camera time to initialize
-            import time
-            time.sleep(0.5)
-            
-            if self.camera.isOpened():
-                # Test if we can actually read a frame
-                ret, test_frame = self.camera.read()
-                if ret:
-                    self.camera_running = True
-                    print("📷 Camera started successfully")
-                    # Start camera loop in background
-                    import threading
-                    threading.Thread(target=self._camera_loop, daemon=True).start()
+        def init_camera():
+            """Initialize camera in a separate thread to avoid blocking"""
+            try:
+                import cv2
+                import time
+                
+                self.camera = cv2.VideoCapture(0)
+                
+                # Give camera time to initialize
+                time.sleep(0.5)
+                
+                if self.camera.isOpened():
+                    # Test if we can actually read a frame
+                    ret, test_frame = self.camera.read()
+                    if ret:
+                        self.camera_running = True
+                        print("📷 Camera started successfully")
+                        # Store first frame
+                        self.latest_frame = cv2.cvtColor(test_frame, cv2.COLOR_BGR2RGB)
+                        # Start camera loop
+                        self._camera_loop()
+                    else:
+                        print("⚠️ Camera opened but can't read frames - likely no hardware")
+                        self.camera.release()
+                        self.camera = None
+                        self._create_placeholder_frame()
                 else:
-                    print("⚠️ Camera opened but can't read frames - likely no hardware")
-                    self.camera.release()
+                    print("⚠️ No camera hardware detected")
                     self.camera = None
                     self._create_placeholder_frame()
-            else:
-                print("⚠️ No camera hardware detected")
+            except Exception as e:
+                print(f"❌ Camera error: {e}")
                 self.camera = None
                 self._create_placeholder_frame()
-        except Exception as e:
-            print(f"❌ Camera error: {e}")
-            self.camera = None
-            self._create_placeholder_frame()
+        
+        # Start camera initialization in background thread
+        import threading
+        threading.Thread(target=init_camera, daemon=True).start()
     
     def _create_placeholder_frame(self):
         """Create a placeholder image when no camera is available"""
