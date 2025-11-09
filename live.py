@@ -59,6 +59,7 @@ class GeminiLive:
             self.audio = None
         self.audio_stream = None
         self.audio_task = None
+        self.event_loop = None  # Store the asyncio event loop
         
         # Camera setup
         self.camera = None
@@ -70,6 +71,7 @@ class GeminiLive:
         """Start Gemini Live session"""
         print("✅ Starting Gemini session...")
         self.running = True
+        self.event_loop = asyncio.get_event_loop()  # Store the event loop
         self.session_context = self.client.aio.live.connect(model=self.model, config=self.config)
         self.session = await self.session_context.__aenter__()
         print("✅ Session connected!")
@@ -106,14 +108,14 @@ class GeminiLive:
 
     def _audio_callback(self, in_data, frame_count, time_info, status):
         """PyAudio callback - sends audio to Gemini"""
-        if self.running and self.session and not self.paused:
+        if self.running and self.session and not self.paused and self.event_loop:
             try:
-                # Send audio data to Gemini
+                # Send audio data to Gemini using the stored event loop
                 asyncio.run_coroutine_threadsafe(
                     self.session.send_realtime_input(
                         media=types.Blob(data=in_data, mime_type="audio/pcm")
                     ),
-                    asyncio.get_event_loop()
+                    self.event_loop
                 )
             except Exception as e:
                 print(f"Error sending audio: {e}")
@@ -149,18 +151,18 @@ class GeminiLive:
                     self.latest_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     
                     # Send frame to Gemini every 1 second (adjust as needed)
-                    if self.session:
+                    if self.session and self.event_loop:
                         # Resize for efficiency
                         small_frame = cv2.resize(frame, (640, 480))
                         _, buffer = cv2.imencode('.jpg', small_frame)
                         
-                        # Send to Gemini
+                        # Send to Gemini using stored event loop
                         try:
                             asyncio.run_coroutine_threadsafe(
                                 self.session.send_realtime_input(
                                     media=types.Blob(data=buffer.tobytes(), mime_type="image/jpeg")
                                 ),
-                                asyncio.get_event_loop()
+                                self.event_loop
                             )
                         except Exception as e:
                             print(f"Error sending frame: {e}")
