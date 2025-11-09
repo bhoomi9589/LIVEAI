@@ -1,2 +1,5 @@
 libgl1-mesa-glx
 ffmpeg
+portaudio19-dev
+python3-pyaudio
+libportaudio2

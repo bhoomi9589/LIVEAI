@@ -2,11 +2,18 @@
 import os
 import asyncio
 import io
-import pyaudio
 import numpy as np
 from PIL import Image
 from google import genai
 from google.genai import types
+
+# Try importing PyAudio - may not be available on all platforms
+try:
+    import pyaudio
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    PYAUDIO_AVAILABLE = False
+    print("⚠️ PyAudio not available - audio capture disabled")
 
 class GeminiLive:
     """
@@ -46,7 +53,10 @@ class GeminiLive:
         self.ui_callback = None
         
         # PyAudio setup
-        self.audio = pyaudio.PyAudio()
+        if PYAUDIO_AVAILABLE:
+            self.audio = pyaudio.PyAudio()
+        else:
+            self.audio = None
         self.audio_stream = None
         self.audio_task = None
         
@@ -76,6 +86,10 @@ class GeminiLive:
 
     def start_audio_capture(self):
         """Start capturing audio from microphone using PyAudio"""
+        if not PYAUDIO_AVAILABLE or not self.audio:
+            print("⚠️ PyAudio not available - skipping audio capture")
+            return
+        
         try:
             self.audio_stream = self.audio.open(
                 format=pyaudio.paInt16,
@@ -273,6 +287,6 @@ class GeminiLive:
     
     def __del__(self):
         """Cleanup PyAudio on deletion"""
-        if hasattr(self, 'audio'):
+        if PYAUDIO_AVAILABLE and hasattr(self, 'audio') and self.audio:
             self.audio.terminate()
 
