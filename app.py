@@ -28,8 +28,24 @@ if not hasattr(st.session_state.gemini_live, 'paused'):
 if 'transcript' not in st.session_state:
     st.session_state.transcript = []
 
+if 'latest_frame' not in st.session_state:
+    st.session_state.latest_frame = None
+
 # --- Callback Functions ---
 # These functions are the "glue" between the UI and the backend.
+
+def video_frame_wrapper(frame):
+    """Wrapper to capture frame for display and send to Gemini."""
+    # Store frame for UI display
+    try:
+        import numpy as np
+        img = frame.to_ndarray(format="bgr24")
+        st.session_state.latest_frame = img
+    except:
+        pass
+    
+    # Send to Gemini
+    return st.session_state.gemini_live.send_video_frame(frame)
 
 def start_session_callback():
     """Called when the 'Start Session' button is clicked."""
@@ -93,9 +109,10 @@ draw_interface(
     stop_session_callback=stop_session_callback,
     pause_session_callback=pause_session_callback,
     resume_session_callback=resume_session_callback,
-    video_frame_callback=st.session_state.gemini_live.send_video_frame,
+    video_frame_callback=video_frame_wrapper,
     audio_frame_callback=st.session_state.gemini_live.send_audio_frame,
     is_running=st.session_state.gemini_live.running,
     is_paused=st.session_state.gemini_live.paused,
-    transcript=st.session_state.transcript
+    transcript=st.session_state.transcript,
+    latest_frame=st.session_state.latest_frame
 )

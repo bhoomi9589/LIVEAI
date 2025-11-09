@@ -11,7 +11,8 @@ def draw_interface(
     audio_frame_callback,
     is_running,
     is_paused,
-    transcript
+    transcript,
+    latest_frame=None
 ):
     """
     Draws the entire Streamlit UI.
@@ -29,6 +30,9 @@ def draw_interface(
     with col1:
         st.subheader("Live Camera Feed")
         
+        # Create a placeholder for the video
+        video_placeholder = st.empty()
+        
         try:
             webrtc_ctx = webrtc_streamer(
                 key="live-assistant",
@@ -40,22 +44,19 @@ def draw_interface(
                 video_frame_callback=video_frame_callback,
                 audio_frame_callback=audio_frame_callback,
                 async_processing=True,
-                # These settings ensure the video preview is shown
-                sendback_audio=False,
-                video_html_attrs={
-                    "style": {"width": "100%", "max-width": "640px", "border-radius": "10px"},
-                    "autoPlay": True,
-                    "controls": False,
-                    "muted": True,
-                },
             )
             
+            # Display the captured frame if available
+            if latest_frame is not None:
+                video_placeholder.image(latest_frame, channels="BGR", use_container_width=True)
+            
             if webrtc_ctx.state.playing:
-                st.success("🎥 Camera and microphone active")
+                st.success("🎥 Camera and microphone active - Streaming to Gemini")
             elif webrtc_ctx.state.signalling:
                 st.warning("⏳ Connecting to camera...")
             else:
-                st.info("📷 Click 'START' below to activate camera and microphone")
+                st.info("📷 Click 'START' in the WebRTC component above to activate camera and microphone")
+                video_placeholder.info("📹 Your camera feed will appear here once started")
                 
         except Exception as e:
             st.error(f"❌ WebRTC Error: {str(e)}")
