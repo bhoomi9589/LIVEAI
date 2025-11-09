@@ -4,6 +4,3 @@ streamlit-webrtc
 av
 pillow
 python-dotenv
-flask
-flask-cors
-requests
