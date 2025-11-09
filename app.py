@@ -2,6 +2,7 @@
 import streamlit as st
 import threading
 import time
+import queue
 from dotenv import load_dotenv
 from live import GeminiLive
 
@@ -21,26 +22,54 @@ if 'transcript' not in st.session_state:
 if 'session_thread' not in st.session_state:
     st.session_state.session_thread = None
 
-# Callback to update UI
+if 'message_queue' not in st.session_state:
+    st.session_state.message_queue = queue.Queue()
+
+# Callback to update UI (thread-safe with queue)
 def ui_update_callback(event_type, data):
-    """Update UI with Gemini responses"""
-    if event_type == "error":
-        st.session_state.transcript.append(f"❌ **Error:** {data}")
-    elif event_type == "text":
-        st.session_state.transcript.append(f"**🤖 Gemini:** {data}")
-    elif event_type == "tool":
-        st.session_state.transcript.append(f"*🔧 {data}*")
+    """Update UI with Gemini responses - thread-safe"""
+    try:
+        st.session_state.message_queue.put((event_type, data))
+    except Exception as e:
+        print(f"Error adding message to queue: {e}")
+
+# Process messages from queue
+def process_messages():
+    """Process all messages from the queue"""
+    try:
+        while not st.session_state.message_queue.empty():
+            event_type, data = st.session_state.message_queue.get_nowait()
+            
+            if event_type == "error":
+                st.session_state.transcript.append(f"❌ **Error:** {data}")
+            elif event_type == "text":
+                st.session_state.transcript.append(f"**🤖 Gemini:** {data}")
+            elif event_type == "tool":
+                st.session_state.transcript.append(f"*🔧 {data}*")
+    except queue.Empty:
+        pass
+    except Exception as e:
+        print(f"Error processing messages: {e}")
 
 # Session control functions
 def start_session():
     """Start Gemini Live session in background thread"""
-    def run_session():
-        st.session_state.gemini_live.ui_callback = ui_update_callback
+    def run_session(gemini_instance, callback):
+        """Run the session with passed instances - no session_state access"""
+        gemini_instance.ui_callback = callback
         import asyncio
-        asyncio.run(st.session_state.gemini_live.start_session())
+        try:
+            asyncio.run(gemini_instance.start_session())
+        except Exception as e:
+            print(f"Session error: {e}")
+            callback("error", str(e))
     
     if not st.session_state.gemini_live.running:
-        st.session_state.session_thread = threading.Thread(target=run_session, daemon=True)
+        st.session_state.session_thread = threading.Thread(
+            target=run_session, 
+            args=(st.session_state.gemini_live, ui_update_callback),
+            daemon=True
+        )
         st.session_state.session_thread.start()
         time.sleep(0.5)  # Give it time to start
 
@@ -51,6 +80,9 @@ def stop_session():
         asyncio.run(st.session_state.gemini_live.stop_session())
         st.session_state.transcript = []
         st.session_state.session_thread = None
+        # Clear the message queue
+        while not st.session_state.message_queue.empty():
+            st.session_state.message_queue.get()
 
 def pause_session():
     """Pause Gemini Live session"""
@@ -66,6 +98,9 @@ st.title("🤖 Gemini Live Assistant")
 st.caption("Real-time multimodal AI with system audio and camera")
 
 st.info("💡 **System Audio Capture:** This app uses PyAudio to capture system microphone and camera feed.")
+
+# Process messages from queue before rendering UI
+process_messages()
 
 # Layout
 col1, col2 = st.columns([0.6, 0.4])
