@@ -1,238 +1,185 @@
-import asyncio
-import base64
-import io
-import traceback
-import cv2
-import pyaudio
-import PIL.Image
-import mss
-import argparse
+# live.py - Gemini Live Backend Logic
 import os
+import asyncio
+import io
+import av
+from PIL import Image
 
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
 
-load_dotenv()
+class GeminiLive:
+    """
+    Manages all backend logic for the Gemini LiveConnect session.
+    This class is completely independent of Streamlit or Flask.
+    """
+    def __init__(self):
+        # --- Gemini API Setup ---
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            # First, check for Streamlit secrets
+            try:
+                import streamlit as st
+                api_key = st.secrets.get("GEMINI_API_KEY")
+            except (ImportError, AttributeError):
+                pass
+        
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not found. Please set it in your .env file or Streamlit secrets.")
+        
+        # Create the client with the API key
+        self.client = genai.Client(api_key=api_key)
 
-# Audio constants
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-SEND_SAMPLE_RATE = 16000
-RECEIVE_SAMPLE_RATE = 24000
-CHUNK_SIZE = 1024
-
-MODEL = "models/gemini-2.0-flash-live-001"
-DEFAULT_MODE = "camera"
-
-client = genai.Client(http_options={"api_version": "v1alpha"}, api_key=os.getenv("GEMINI_API_KEY"))
-tools = [types.Tool(google_search=types.GoogleSearch())]
-
-CONFIG = types.LiveConnectConfig(
-    response_modalities=[types.Modality.AUDIO],
-    generation_config=types.GenerationConfig(
-        max_output_tokens=300,
-        temperature=0.7
-    ),
-    speech_config=types.SpeechConfig(
-        voice_config=types.VoiceConfig(
-            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Leda")
-        )
-    ),
-    tools=types.ToolListUnion(tools),
-)
-
-pya = pyaudio.PyAudio()
-
-
-class AudioLoop:
-    def __init__(self, video_mode=DEFAULT_MODE):
-        self.video_mode = video_mode
-        self.audio_in_queue = asyncio.Queue()
-        self.out_queue = asyncio.Queue(maxsize=5)
-
-        self.session = None
-        self.audio_stream = None
-        self.playback_stream = None
-
-        self.running = True
-        self.tasks: list[asyncio.Task] = []
-
-        self.received_texts = []
-        self.received_audio = []
-
-    async def send_text(self):
-        while self.running:
-            text = await asyncio.to_thread(input, "message > ")
-            if text.lower() == "q":
-                break
-            if self.session:
-                await self.session.send_client_content(
-                    turns=types.Content(
-                        role="user",
-                        parts=[types.Part(text=text or ".")]
-                    )
+        # Use a model that supports live/bidirectional streaming
+        self.model = "models/gemini-2.0-flash-live-001"
+        self.tools = [types.Tool(google_search=types.GoogleSearch())]
+        self.config = types.LiveConnectConfig(
+            response_modalities=[types.Modality.AUDIO], # Model can respond with audio
+            generation_config=types.GenerationConfig(max_output_tokens=300, temperature=0.7),
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Leda")
                 )
+            ),
+            tools=types.ToolListUnion(self.tools),
+        )
+        self.session = None
+        self.session_context = None
+        self.running = False
+        self.receive_task = None
+        self.ui_callback = None
 
-    def _get_frame(self, cap):
-        ret, frame = cap.read()
-        if not ret:
-            return None
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = PIL.Image.fromarray(frame_rgb)
-        img.thumbnail((1024, 1024))
+    async def start_session(self):
+        """Starts a new Gemini LiveConnect session."""
+        print("✅ Starting Gemini session...")
+        self.running = True
+        # Store the async context manager
+        self.session_context = self.client.aio.live.connect(model=self.model, config=self.config)
+        # Enter the context and get the session
+        self.session = await self.session_context.__aenter__()
+        print("✅ Session connected!")
+        
+        # Start the background receive task
+        if self.ui_callback:
+            self.receive_task = asyncio.create_task(self._receive_loop())
 
+    async def _receive_loop(self):
+        """Background task that continuously listens for responses."""
+        print("🎧 Starting background receive loop...")
+        try:
+            while self.running and self.session:
+                try:
+                    print("📡 Calling session.receive()...")
+                    # This will block until there's a response
+                    async for response in self.session.receive():
+                        if not self.running:
+                            break
+                        
+                        print(f"📦 Received response: {type(response)}")
+                        
+                        # Process the response
+                        if hasattr(response, 'text') and response.text:
+                            print(f"📝 Received text: {response.text}")
+                            if self.ui_callback:
+                                self.ui_callback("text", response.text)
+                        
+                        if hasattr(response, 'server_content') and response.server_content:
+                            print(f"📦 Received server content")
+                            if hasattr(response.server_content, 'model_turn'):
+                                model_turn = response.server_content.model_turn
+                                if hasattr(model_turn, 'parts'):
+                                    for part in model_turn.parts:
+                                        if hasattr(part, 'text') and part.text:
+                                            print(f"📝 Part text: {part.text}")
+                                            if self.ui_callback:
+                                                self.ui_callback("text", part.text)
+                        
+                        if hasattr(response, 'parts'):
+                            for part in response.parts:
+                                if hasattr(part, 'tool_call') and part.tool_call:
+                                    print(f"🔧 Tool call: {part.tool_call.name}")
+                                    if self.ui_callback:
+                                        self.ui_callback("tool", f"[🛠️ Tool Call: {part.tool_call.name}]")
+                    
+                    # If receive() completes, wait a bit and try again
+                    print("⏸️ Receive completed, waiting...")
+                    await asyncio.sleep(0.5)
+                
+                except Exception as e:
+                    if self.running:
+                        print(f"⚠️ Receive error: {e}")
+                        await asyncio.sleep(0.5)
+                    else:
+                        break
+                        
+        except asyncio.CancelledError:
+            print("🛑 Receive loop cancelled")
+        except Exception as e:
+            print(f"❌ Fatal receive error: {e}")
+        finally:
+            print("🎧 Receive loop stopped")
+
+    async def stop_session(self):
+        """Stops the current Gemini LiveConnect session."""
+        print("🛑 stop_session() called")
+        self.running = False
+        
+        # Cancel the receive task if it's running
+        if self.receive_task and not self.receive_task.done():
+            self.receive_task.cancel()
+            try:
+                await self.receive_task
+            except asyncio.CancelledError:
+                pass
+        
+        if self.session_context:
+            try:
+                await self.session_context.__aexit__(None, None, None)
+            except Exception as e:
+                print(f"Error closing session: {e}")
+            self.session_context = None
+        
+        self.session = None
+        self.receive_task = None
+        print("🛑 Gemini session stopped.")
+
+    async def send_audio_frame(self, frame: av.AudioFrame):
+        """Processes and sends an audio frame from WebRTC to Gemini."""
+        if not self.running or not self.session:
+            return
+        audio_data = frame.to_ndarray().tobytes()
+        try:
+            await self.session.send_realtime_input(
+                media=types.Blob(data=audio_data, mime_type="audio/pcm")
+            )
+        except Exception as e:
+            print(f"Error sending audio: {e}")
+
+    async def send_video_frame(self, frame: av.VideoFrame):
+        """Processes and sends a video frame from WebRTC to Gemini."""
+        if not self.running or not self.session:
+            return
+
+        img = frame.to_image()
         image_io = io.BytesIO()
         img.save(image_io, format="jpeg")
         image_io.seek(0)
-
-        return {
-            "mime_type": "image/jpeg",
-            "data": base64.b64encode(image_io.read()).decode(),
-        }
-
-    async def get_frames(self):
-        cap = await asyncio.to_thread(cv2.VideoCapture, 0)
-        while self.running:
-            frame = await asyncio.to_thread(self._get_frame, cap)
-            if frame is None:
-                break
-            await asyncio.sleep(1.0)
-            await self.out_queue.put(frame)
-        cap.release()
-
-    def _get_screen(self):
-        sct = mss.mss()
-        monitor = sct.monitors[0]
-        img = sct.grab(monitor)
-        pil_img = PIL.Image.frombytes("RGB", img.size, img.rgb)
-
-        image_io = io.BytesIO()
-        pil_img.save(image_io, format="jpeg")
-        image_io.seek(0)
-
-        return {
-            "mime_type": "image/jpeg",
-            "data": base64.b64encode(image_io.read()).decode(),
-        }
-
-    async def get_screen(self):
-        while self.running:
-            frame = await asyncio.to_thread(self._get_screen)
-            if frame is None:
-                break
-            await asyncio.sleep(1.0)
-            await self.out_queue.put(frame)
-
-    async def send_realtime(self):
-        while self.running:
-            msg = await self.out_queue.get()
-            if self.session:
-                await self.session.send_realtime_input(
-                    media=types.Blob(data=msg["data"], mime_type=msg["mime_type"])
-                )
-
-    async def listen_audio(self):
-        mic_info = pya.get_default_input_device_info()
-        self.audio_stream = await asyncio.to_thread(
-            pya.open,
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=SEND_SAMPLE_RATE,
-            input=True,
-            input_device_index=int(mic_info["index"]),
-            frames_per_buffer=CHUNK_SIZE,
-        )
-        kwargs = {"exception_on_overflow": False}
-        while self.running:
-            data = await asyncio.to_thread(self.audio_stream.read, CHUNK_SIZE, **kwargs)
-            await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
-
-    async def receive_audio(self):
-        while self.running:
-            if not self.session:
-                await asyncio.sleep(1)
-                continue
-            turn = self.session.receive()
-            async for response in turn:
-                if data := response.data:
-                    self.audio_in_queue.put_nowait(data)
-                    self.received_audio.append(data)
-
-                if hasattr(response, 'parts'):
-                    for part in response.parts:
-                        if part.text:
-                            print(part.text, end="")
-                            self.received_texts.append(part.text)
-                        elif part.tool_call:
-                            print(f"\n[Tool Call: {part.tool_call.name}]")
-
-    async def play_audio(self):
-        self.playback_stream = await asyncio.to_thread(
-            pya.open,
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=RECEIVE_SAMPLE_RATE,
-            output=True,
-        )
-        while self.running:
-            bytestream = await self.audio_in_queue.get()
-            await asyncio.to_thread(self.playback_stream.write, bytestream)
-
-    async def run(self):
+        
+        # Note: 'data' for image blobs should be raw bytes, not base64 encoded string
+        # for this specific API endpoint.
+        image_data = image_io.getvalue()
         try:
-            async with (
-                client.aio.live.connect(model=MODEL, config=CONFIG) as session,
-                asyncio.TaskGroup() as tg,
-            ):
-                self.session = session
-                self.audio_in_queue = asyncio.Queue()
-                self.out_queue = asyncio.Queue(maxsize=5)
-
-                self.tasks.append(tg.create_task(self.send_text()))
-                self.tasks.append(tg.create_task(self.send_realtime()))
-                self.tasks.append(tg.create_task(self.listen_audio()))
-                if self.video_mode == "camera":
-                    self.tasks.append(tg.create_task(self.get_frames()))
-                elif self.video_mode == "screen":
-                    self.tasks.append(tg.create_task(self.get_screen()))
-                self.tasks.append(tg.create_task(self.receive_audio()))
-                self.tasks.append(tg.create_task(self.play_audio()))
-
-        except asyncio.CancelledError:
-            pass
+            await self.session.send_realtime_input(
+                media=types.Blob(data=image_data, mime_type="image/jpeg")
+            )
         except Exception as e:
-            traceback.print_exception(e)
-        finally:
-            self._cleanup()
+            print(f"Error sending video frame: {e}")
 
-    def stop(self):
-        self.running = False
-        for task in list(self.tasks):
-            if not task.done():
-                task.cancel()
-        self.tasks.clear()
-        print("✅ AudioLoop stop signal sent")
-
-    def _cleanup(self):
-        try:
-            self.session = None
-            if self.audio_stream:
-                try: self.audio_stream.close()
-                except Exception: pass
-                self.audio_stream = None
-
-            if self.playback_stream:
-                try: self.playback_stream.close()
-                except Exception: pass
-                self.playback_stream = None
-        except Exception as e:
-            print(f"⚠️ Cleanup error: {e}")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default=DEFAULT_MODE, choices=["camera", "screen", "none"])
-    args = parser.parse_args()
-    main = AudioLoop(video_mode=args.mode)
-    asyncio.run(main.run())
+    def receive_responses(self, ui_callback):
+        """Sets up the UI callback for receiving responses."""
+        self.ui_callback = ui_callback
+        
+        # If session is already running, start the receive task
+        if self.running and self.session and not self.receive_task:
+            self.receive_task = asyncio.create_task(self._receive_loop())
+            print("🎧 Started receive loop with callback")

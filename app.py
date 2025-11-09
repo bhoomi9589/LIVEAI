@@ -1,166 +1,76 @@
-from flask import Flask, request, jsonify, Response
+# app.py - Streamlit WebRTC Gemini Live Assistant
+import streamlit as st
 import asyncio
-import threading
-import cv2
-import mss
-import numpy as np
-import time
-from live import AudioLoop
+from dotenv import load_dotenv
 
-app = Flask(__name__)
+# Import the backend logic and the UI drawing function
+from live import GeminiLive
+from ui import draw_interface
 
-# -----------------------
-# Global state
-# -----------------------
-audio_loop_instance = None
-loop_thread = None
-status = "stopped"  # Can be: stopped, running, paused
-cap = None          # Camera object
-mode = "none"       # camera, screen, or none
+# Load environment variables from .env file for local development
+load_dotenv()
 
-# -----------------------
-# Thread Target Function
-# -----------------------
-def run_audio_loop_in_thread(selected_mode):
-    """This function runs in the background thread to handle the Gemini session."""
-    global audio_loop_instance
-    audio_loop_instance = AudioLoop(video_mode=selected_mode)
-    asyncio.run(audio_loop_instance.run())
-    print("AudioLoop has finished.")
-
-# -----------------------
-# API Endpoints
-# -----------------------
-
-@app.route("/")
-def index():
-    return "API is running"
-
-@app.route("/status", methods=["GET"])
-def get_status():
-    return jsonify({"status": status, "mode": mode})
-
-@app.route("/start", methods=["POST"])
-def start_session():
-    global loop_thread, status, mode, cap
-    
-    if status != "stopped":
-        return jsonify({"status": "error", "message": f"Session is already {status}"}), 400
-
-    requested_mode = request.json.get("mode", "camera")
-    
-    if requested_mode == "camera":
-        print("Initializing camera...")
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            print("Error: Failed to open camera.")
-            return jsonify({"status": "error", "message": "Failed to open camera"}), 500
-        print("Camera initialized successfully.")
-    
-    mode = requested_mode
-    loop_thread = threading.Thread(target=run_audio_loop_in_thread, args=(mode,), daemon=True)
-    loop_thread.start()
-    status = "running"
-    
-    return jsonify({"status": "success", "message": f"Session started in {mode} mode"})
-
-@app.route("/pause", methods=["POST"])
-def pause_session():
-    global audio_loop_instance, loop_thread, status, cap
-    
-    if status != "running":
-        return jsonify({"status": "error", "message": "Only a running session can be paused"}), 400
-
-    if audio_loop_instance:
-        audio_loop_instance.stop()
-    
-    if loop_thread and loop_thread.is_alive():
-        loop_thread.join(timeout=5)
-    
-    if cap:
-        print("Releasing camera on pause...")
-        cap.release()
-        cap = None
-    
-    status = "paused"
-    return jsonify({"status": "success", "message": "Session paused"})
-
-@app.route("/resume", methods=["POST"])
-def resume_session():
-    global loop_thread, status, mode, cap
-    
-    if status != "paused":
-        return jsonify({"status": "error", "message": "No paused session to resume"}), 400
-
-    if mode == "camera":
-        print("Re-initializing camera on resume...")
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            print("Error: Failed to re-open camera.")
-            return jsonify({"status": "error", "message": "Failed to re-open camera on resume"}), 500
-
-    loop_thread = threading.Thread(target=run_audio_loop_in_thread, args=(mode,), daemon=True)
-    loop_thread.start()
-    status = "running"
-    
-    return jsonify({"status": "success", "message": "Session resumed"})
-
-@app.route("/stop", methods=["POST"])
-def stop_session():
-    global audio_loop_instance, loop_thread, status, cap, mode
-    
-    if status == "stopped":
-        return jsonify({"status": "error", "message": "No session to stop"}), 400
-
+# --- Session State Initialization ---
+# This ensures that our backend object and transcript persist across Streamlit reruns.
+if 'gemini_live' not in st.session_state:
     try:
-        if audio_loop_instance:
-            audio_loop_instance.stop()
-        
-        if loop_thread and loop_thread.is_alive():
-            loop_thread.join(timeout=5)
-        
-        if cap:
-            print("Releasing camera...")
-            cap.release()
-        
-        audio_loop_instance = None
-        loop_thread = None
-        cap = None
-        status = "stopped"
-        mode = "none"
-        
-        return jsonify({"status": "success", "message": "Session stopped"})
-    except Exception as e:
-        print(f"Error during stop: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        # Instantiate our backend logic class
+        st.session_state.gemini_live = GeminiLive()
+    except ValueError as e:
+        # If API key is missing, show an error and stop.
+        st.error(str(e))
+        st.stop()
 
-@app.route("/frame", methods=["GET"])
-def get_frame():
-    global cap, status, mode
-    if status != "running":
-        return jsonify({"status": "error", "message": f"Session is {status}, not running"}), 400
+if 'transcript' not in st.session_state:
+    st.session_state.transcript = []
 
-    try:
-        frame = None
-        if mode == "camera":
-            if cap is None or not cap.isOpened():
-                return jsonify({"status": "error", "message": "Camera not available"}), 500
-            ret, frame = cap.read()
-            if not ret:
-                return jsonify({"status": "error", "message": "Failed to read frame from camera"}), 500
-        elif mode == "screen":
-            with mss.mss() as sct:
-                monitor = sct.monitors[1]
-                img = sct.grab(monitor)
-                frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGBA2BGR)
+# --- Callback Functions ---
+# These functions are the "glue" between the UI and the backend.
 
-        if frame is None:
-            return jsonify({"status": "error", "message": "No frame captured"}), 500
+def start_session_callback():
+    """Called when the 'Start Session' button is clicked."""
+    # Run the async start_session method from our backend class
+    asyncio.run(st.session_state.gemini_live.start_session())
 
-        _, jpeg = cv2.imencode(".jpg", frame)
-        return Response(jpeg.tobytes(), mimetype="image/jpeg")
-    except Exception as e:
-        return jsonify({"status": "error", "message": f"Frame capture error: {e}"}), 500
+def stop_session_callback():
+    """Called when the 'Stop Session' button is clicked."""
+    # Run the async stop_session method
+    asyncio.run(st.session_state.gemini_live.stop_session())
+    # Clear the transcript when the session stops
+    st.session_state.transcript = []
 
-if __name__ == "__main__":
-    app.run(debug=False, port=5000, host='0.0.0.0', use_reloader=False)
+def ui_update_callback(event_type, data):
+    """
+    This function is passed to the backend to allow it to update the UI's state.
+    """
+    if event_type == "error":
+        st.error(data)
+    elif event_type == "text":
+        st.session_state.transcript.append(f"**🤖 Gemini:** {data}")
+    elif event_type == "tool":
+        st.session_state.transcript.append(f"*{data}*")
+    
+    # Trigger a UI refresh to show the new transcript entry
+    if 'rerun_needed' not in st.session_state:
+        st.session_state.rerun_needed = True
+
+# --- Main Application Execution ---
+
+# Check if a rerun is needed from a background callback
+if st.session_state.get('rerun_needed', False):
+    st.session_state.rerun_needed = False
+    st.rerun()
+
+# Draw the user interface, passing in the necessary functions and state
+draw_interface(
+    start_session_callback=start_session_callback,
+    stop_session_callback=stop_session_callback,
+    video_frame_callback=st.session_state.gemini_live.send_video_frame,
+    audio_frame_callback=st.session_state.gemini_live.send_audio_frame,
+    is_running=st.session_state.gemini_live.running,
+    transcript=st.session_state.transcript
+)
+
+# If the session is running, set up the callback for receiving responses
+if st.session_state.gemini_live.running:
+    st.session_state.gemini_live.receive_responses(ui_update_callback)
