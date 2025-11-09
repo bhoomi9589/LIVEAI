@@ -1,118 +1,150 @@
-# app.py - Streamlit WebRTC Gemini Live Assistant
+# app.py - Streamlit UI for Gemini Live Assistant (Flask Backend)
 import streamlit as st
-import asyncio
-from dotenv import load_dotenv
+import requests
+import base64
+import io
+import time
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+from PIL import Image
 
-# Import the backend logic and the UI drawing function
-from live import GeminiLive
-from ui import draw_interface
+# Flask server URL
+FLASK_URL = "http://localhost:5000"
 
-# Load environment variables from .env file for local development
-load_dotenv()
-
-# --- Session State Initialization ---
-# This ensures that our backend object and transcript persist across Streamlit reruns.
-if 'gemini_live' not in st.session_state:
-    try:
-        # Instantiate our backend logic class
-        st.session_state.gemini_live = GeminiLive()
-    except ValueError as e:
-        # If API key is missing, show an error and stop.
-        st.error(str(e))
-        st.stop()
-
-# Initialize paused attribute if it doesn't exist (for backwards compatibility)
-if not hasattr(st.session_state.gemini_live, 'paused'):
-    st.session_state.gemini_live.paused = False
-
+# Initialize session state
 if 'transcript' not in st.session_state:
     st.session_state.transcript = []
+if 'is_running' not in st.session_state:
+    st.session_state.is_running = False
+if 'is_paused' not in st.session_state:
+    st.session_state.is_paused = False
 
-if 'latest_frame' not in st.session_state:
-    st.session_state.latest_frame = None
+# Page config
+st.set_page_config(page_title="Gemini Live Assistant", page_icon="🤖", layout="wide")
+st.title("🤖 Gemini Live Assistant")
+st.caption("Flask backend + Streamlit UI with browser camera/microphone")
 
-# --- Callback Functions ---
-# These functions are the "glue" between the UI and the backend.
+# Info banner
+st.info("💡 **Tip:** Start Flask server first: `python flask_server.py`, then allow camera/mic permissions!")
 
-def video_frame_wrapper(frame):
-    """Wrapper to capture frame for display and send to Gemini."""
-    # Store frame for UI display
-    try:
-        import numpy as np
-        img = frame.to_ndarray(format="bgr24")
-        st.session_state.latest_frame = img
-    except:
-        pass
+# Layout
+col1, col2 = st.columns([0.6, 0.4])
+
+# Video frame callback - sends frames to Flask
+def video_callback(frame):
+    """Send video frames to Flask server"""
+    if st.session_state.is_running and not st.session_state.is_paused:
+        try:
+            # Convert frame to JPEG
+            img = frame.to_image()
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='JPEG', quality=70)
+            img_base64 = base64.b64encode(img_byte_arr.getvalue()).decode()
+            
+            # Send to Flask
+            requests.post(f"{FLASK_URL}/video", json={"image": img_base64}, timeout=0.1)
+        except:
+            pass
+    return frame
+
+# Audio frame callback - sends audio to Flask
+def audio_callback(frame):
+    """Send audio frames to Flask server"""
+    if st.session_state.is_running and not st.session_state.is_paused:
+        try:
+            audio_data = frame.to_ndarray().tobytes()
+            audio_base64 = base64.b64encode(audio_data).decode()
+            
+            # Send to Flask
+            requests.post(f"{FLASK_URL}/audio", json={"audio": audio_base64}, timeout=0.1)
+        except:
+            pass
+    return frame
+
+with col1:
+    st.subheader("Live Camera Feed")
     
-    # Send to Gemini
-    return st.session_state.gemini_live.send_video_frame(frame)
-
-def start_session_callback():
-    """Called when the 'Start Session' button is clicked."""
-    # Register the callback first, before starting the session
-    if not st.session_state.gemini_live.ui_callback:
-        st.session_state.gemini_live.receive_responses(ui_update_callback)
+    # WebRTC streamer with browser camera
+    webrtc_ctx = webrtc_streamer(
+        key="gemini-live",
+        mode=WebRtcMode.SENDONLY,
+        rtc_configuration=RTCConfiguration(
+            {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        ),
+        media_stream_constraints={"video": True, "audio": True},
+        video_frame_callback=video_callback,
+        audio_frame_callback=audio_callback,
+        async_processing=True,
+    )
     
-    # Now run the async start_session method from our backend class
-    asyncio.run(st.session_state.gemini_live.start_session())
-
-def stop_session_callback():
-    """Called when the 'Stop Session' button is clicked."""
-    # Run the async stop_session method
-    asyncio.run(st.session_state.gemini_live.stop_session())
-    # Clear the transcript when the session stops
-    st.session_state.transcript = []
-
-def pause_session_callback():
-    """Called when the 'Pause Session' button is clicked."""
-    # Check if pause_session method exists (backwards compatibility)
-    if hasattr(st.session_state.gemini_live, 'pause_session'):
-        st.session_state.gemini_live.pause_session()
+    if webrtc_ctx.state.playing:
+        st.success("🎥 Camera and microphone active")
     else:
-        # Fallback for old instances
-        st.session_state.gemini_live.paused = True
+        st.info("📷 Click START above to activate camera and microphone")
 
-def resume_session_callback():
-    """Called when the 'Resume Session' button is clicked."""
-    # Check if resume_session method exists (backwards compatibility)
-    if hasattr(st.session_state.gemini_live, 'resume_session'):
-        st.session_state.gemini_live.resume_session()
-    else:
-        # Fallback for old instances
-        st.session_state.gemini_live.paused = False
-
-def ui_update_callback(event_type, data):
-    """
-    This function is passed to the backend to allow it to update the UI's state.
-    """
-    if event_type == "error":
-        st.error(data)
-    elif event_type == "text":
-        st.session_state.transcript.append(f"**🤖 Gemini:** {data}")
-    elif event_type == "tool":
-        st.session_state.transcript.append(f"*{data}*")
+with col2:
+    st.subheader("Controls & Transcript")
     
-    # Trigger a UI refresh to show the new transcript entry
-    if 'rerun_needed' not in st.session_state:
-        st.session_state.rerun_needed = True
-
-# --- Main Application Execution ---
-
-# Check if a rerun is needed from a background callback
-if st.session_state.get('rerun_needed', False):
-    st.session_state.rerun_needed = False
-    st.rerun()
-
-# Draw the user interface, passing in the necessary functions and state
-draw_interface(
-    start_session_callback=start_session_callback,
-    stop_session_callback=stop_session_callback,
-    pause_session_callback=pause_session_callback,
-    resume_session_callback=resume_session_callback,
-    video_frame_callback=video_frame_wrapper,
-    audio_frame_callback=st.session_state.gemini_live.send_audio_frame,
-    is_running=st.session_state.gemini_live.running,
-    is_paused=st.session_state.gemini_live.paused,
-    transcript=st.session_state.transcript,
-    latest_frame=st.session_state.latest_frame
-)
+    # Session controls
+    if not st.session_state.is_running:
+        if st.button("🚀 Start Session", use_container_width=True):
+            try:
+                response = requests.post(f"{FLASK_URL}/start", timeout=5)
+                if response.json().get("status") == "started":
+                    st.session_state.is_running = True
+                    st.success("Session started!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}. Make sure Flask server is running!")
+    else:
+        btn_col1, btn_col2 = st.columns(2)
+        
+        with btn_col1:
+            if st.session_state.is_paused:
+                if st.button("▶️ Resume", use_container_width=True):
+                    requests.post(f"{FLASK_URL}/resume")
+                    st.session_state.is_paused = False
+                    st.rerun()
+            else:
+                if st.button("⏸️ Pause", use_container_width=True):
+                    requests.post(f"{FLASK_URL}/pause")
+                    st.session_state.is_paused = True
+                    st.rerun()
+        
+        with btn_col2:
+            if st.button("🛑 Stop", use_container_width=True):
+                requests.post(f"{FLASK_URL}/stop")
+                st.session_state.is_running = False
+                st.session_state.is_paused = False
+                st.session_state.transcript = []
+                st.rerun()
+        
+        # Status
+        if st.session_state.is_paused:
+            st.warning("⏸️ Session paused")
+        else:
+            st.success("✅ Session active")
+    
+    st.markdown("---")
+    
+    # Transcript display
+    st.write("**Conversation:**")
+    
+    # Fetch transcript from Flask
+    if st.session_state.is_running:
+        try:
+            response = requests.get(f"{FLASK_URL}/transcript", timeout=1)
+            transcript = response.json().get("transcript", [])
+            st.session_state.transcript = transcript
+        except:
+            pass
+    
+    if st.session_state.transcript:
+        for entry in st.session_state.transcript:
+            st.markdown(entry)
+    else:
+        st.info("💬 Start a session and speak to see the conversation!")
+    
+    # Auto-refresh when running
+    if st.session_state.is_running:
+        time.sleep(1)
+        st.rerun()
