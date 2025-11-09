@@ -29,7 +29,11 @@ if 'transcript' not in st.session_state:
 
 def start_session_callback():
     """Called when the 'Start Session' button is clicked."""
-    # Run the async start_session method from our backend class
+    # Register the callback first, before starting the session
+    if not st.session_state.gemini_live.ui_callback:
+        st.session_state.gemini_live.receive_responses(ui_update_callback)
+    
+    # Now run the async start_session method from our backend class
     asyncio.run(st.session_state.gemini_live.start_session())
 
 def stop_session_callback():
@@ -70,7 +74,3 @@ draw_interface(
     is_running=st.session_state.gemini_live.running,
     transcript=st.session_state.transcript
 )
-
-# Set up the callback for receiving responses (only sets the callback, doesn't block)
-if st.session_state.gemini_live.running and not st.session_state.gemini_live.ui_callback:
-    st.session_state.gemini_live.receive_responses(ui_update_callback)

@@ -59,9 +59,10 @@ class GeminiLive:
         self.session = await self.session_context.__aenter__()
         print("✅ Session connected!")
         
-        # Start the background receive task
+        # Start the background receive task if callback is set
         if self.ui_callback:
             self.receive_task = asyncio.create_task(self._receive_loop())
+            print("🎧 Started receive loop")
 
     async def _receive_loop(self):
         """Background task that continuously listens for responses."""
@@ -176,8 +177,4 @@ class GeminiLive:
     def receive_responses(self, ui_callback):
         """Sets up the UI callback for receiving responses."""
         self.ui_callback = ui_callback
-        
-        # If session is already running, start the receive task
-        if self.running and self.session and not self.receive_task:
-            self.receive_task = asyncio.create_task(self._receive_loop())
-            print("🎧 Started receive loop with callback")
+        print(f"✅ UI callback registered")
