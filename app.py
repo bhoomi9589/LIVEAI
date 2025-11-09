@@ -49,11 +49,21 @@ def stop_session_callback():
 
 def pause_session_callback():
     """Called when the 'Pause Session' button is clicked."""
-    st.session_state.gemini_live.pause_session()
+    # Check if pause_session method exists (backwards compatibility)
+    if hasattr(st.session_state.gemini_live, 'pause_session'):
+        st.session_state.gemini_live.pause_session()
+    else:
+        # Fallback for old instances
+        st.session_state.gemini_live.paused = True
 
 def resume_session_callback():
     """Called when the 'Resume Session' button is clicked."""
-    st.session_state.gemini_live.resume_session()
+    # Check if resume_session method exists (backwards compatibility)
+    if hasattr(st.session_state.gemini_live, 'resume_session'):
+        st.session_state.gemini_live.resume_session()
+    else:
+        # Fallback for old instances
+        st.session_state.gemini_live.paused = False
 
 def ui_update_callback(event_type, data):
     """
