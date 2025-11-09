@@ -20,31 +20,38 @@ class GeminiLive:
     Manages Gemini Live session with PyAudio for system audio capture.
     """
     def __init__(self):
-        # Get API key
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            try:
-                import streamlit as st
-                api_key = st.secrets.get("GEMINI_API_KEY")
-            except:
-                pass
+        try:
+            # Get API key
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                try:
+                    import streamlit as st
+                    api_key = st.secrets.get("GEMINI_API_KEY")
+                except:
+                    pass
+            
+            if not api_key:
+                raise ValueError("GEMINI_API_KEY not found in .env file or Streamlit secrets")
+            
+            print("🔑 API key found, initializing client...")
+            self.client = genai.Client(api_key=api_key)
+            self.model = "models/gemini-2.0-flash-live-001"
+            self.tools = [types.Tool(google_search=types.GoogleSearch())]
+            self.config = types.LiveConnectConfig(
+                response_modalities=[types.Modality.AUDIO],
+                generation_config=types.GenerationConfig(max_output_tokens=300, temperature=0.7),
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Leda")
+                    )
+                ),
+                tools=types.ToolListUnion(self.tools),
+            )
+            print("✅ Client initialized successfully")
+        except Exception as e:
+            print(f"❌ Initialization error: {e}")
+            raise
         
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY not found in .env file or Streamlit secrets")
-        
-        self.client = genai.Client(api_key=api_key)
-        self.model = "models/gemini-2.0-flash-live-001"
-        self.tools = [types.Tool(google_search=types.GoogleSearch())]
-        self.config = types.LiveConnectConfig(
-            response_modalities=[types.Modality.AUDIO],
-            generation_config=types.GenerationConfig(max_output_tokens=300, temperature=0.7),
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Leda")
-                )
-            ),
-            tools=types.ToolListUnion(self.tools),
-        )
         self.session = None
         self.session_context = None
         self.running = False
@@ -52,11 +59,8 @@ class GeminiLive:
         self.receive_task = None
         self.ui_callback = None
         
-        # PyAudio setup
-        if PYAUDIO_AVAILABLE:
-            self.audio = pyaudio.PyAudio()
-        else:
-            self.audio = None
+        # PyAudio setup - defer initialization to avoid blocking
+        self.audio = None
         self.audio_stream = None
         self.audio_task = None
         self.event_loop = None  # Store the asyncio event loop
@@ -102,11 +106,15 @@ class GeminiLive:
 
     def start_audio_capture(self):
         """Start capturing audio from microphone using PyAudio"""
-        if not PYAUDIO_AVAILABLE or not self.audio:
+        if not PYAUDIO_AVAILABLE:
             print("⚠️ PyAudio not available - skipping audio capture")
             return
         
         try:
+            # Initialize PyAudio only when needed
+            if not self.audio:
+                self.audio = pyaudio.PyAudio()
+            
             self.audio_stream = self.audio.open(
                 format=pyaudio.paInt16,
                 channels=1,
@@ -119,6 +127,7 @@ class GeminiLive:
             print("🎤 PyAudio microphone started")
         except Exception as e:
             print(f"❌ PyAudio error: {e}")
+            print("⚠️ Continuing without audio capture")
 
     def _audio_callback(self, in_data, frame_count, time_info, status):
         """PyAudio callback - sends audio to Gemini"""
@@ -143,15 +152,23 @@ class GeminiLive:
                 import cv2
                 import time
                 
+                print("📷 Attempting to open camera...")
                 self.camera = cv2.VideoCapture(0)
                 
-                # Give camera time to initialize
-                time.sleep(0.5)
+                # Give camera time to initialize (with timeout)
+                max_wait = 2.0  # 2 second timeout
+                start_time = time.time()
+                
+                while not self.camera.isOpened() and (time.time() - start_time) < max_wait:
+                    time.sleep(0.1)
                 
                 if self.camera.isOpened():
-                    # Test if we can actually read a frame
+                    # Test if we can actually read a frame (with timeout)
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    
                     ret, test_frame = self.camera.read()
-                    if ret:
+                    if ret and test_frame is not None:
                         self.camera_running = True
                         print("📷 Camera started successfully")
                         # Store first frame
@@ -159,12 +176,15 @@ class GeminiLive:
                         # Start camera loop
                         self._camera_loop()
                     else:
-                        print("⚠️ Camera opened but can't read frames - likely no hardware")
-                        self.camera.release()
+                        print("⚠️ Camera opened but can't read frames - no hardware")
+                        try:
+                            self.camera.release()
+                        except:
+                            pass
                         self.camera = None
                         self._create_placeholder_frame()
                 else:
-                    print("⚠️ No camera hardware detected")
+                    print("⚠️ No camera hardware detected (timeout)")
                     self.camera = None
                     self._create_placeholder_frame()
             except Exception as e:

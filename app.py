@@ -208,7 +208,7 @@ with col2:
         else:
             st.info("💭 Start a session and speak to see the conversation here!")
 
-# Auto-refresh while session is running
+# Auto-refresh while session is running (reduced frequency to lower server load)
 if st.session_state.gemini_live.running:
-    time.sleep(0.5)
+    time.sleep(1.0)  # Changed from 0.5 to 1.0 second
     st.rerun()
