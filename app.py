@@ -106,25 +106,37 @@ process_messages()
 col1, col2 = st.columns([0.6, 0.4])
 
 with col1:
-    st.subheader("📹 Camera Feed Status")
-    
-    # Display camera status
-    if st.session_state.gemini_live.running:
-        if st.session_state.gemini_live.camera_running:
-            st.success("🎥 Camera is active and capturing frames")
-            st.info("🎤 Microphone is active and capturing audio (16kHz)")
-        else:
-            st.warning("📷 Camera initialization in progress...")
-    else:
-        st.info("📷 Click 'Start Session' to activate camera and microphone")
+    st.subheader("📹 Camera Feed")
     
     # Camera placeholder
     camera_placeholder = st.empty()
     
     # Show latest frame if available
-    if st.session_state.gemini_live.running and hasattr(st.session_state.gemini_live, 'latest_frame'):
-        if st.session_state.gemini_live.latest_frame is not None:
-            camera_placeholder.image(st.session_state.gemini_live.latest_frame, caption="Live Camera Feed", use_container_width=True)
+    if st.session_state.gemini_live.latest_frame is not None:
+        camera_placeholder.image(
+            st.session_state.gemini_live.latest_frame, 
+            caption="Live Camera Feed", 
+            use_container_width=True
+        )
+    else:
+        # Show status message
+        if st.session_state.gemini_live.running:
+            if st.session_state.gemini_live.camera_running:
+                camera_placeholder.info("📷 Camera is initializing... waiting for first frame")
+            else:
+                camera_placeholder.warning("⚠️ Camera not available (no hardware detected on server)")
+        else:
+            camera_placeholder.info("📷 Camera will activate when you start the session")
+    
+    # Display status
+    if st.session_state.gemini_live.running:
+        if st.session_state.gemini_live.camera_running:
+            st.success("🎥 Camera capture active")
+        else:
+            st.warning("⚠️ No camera hardware detected")
+        st.info("🎤 Microphone capture active (PyAudio)")
+    else:
+        st.caption("💡 Click 'Start Session' to activate camera and microphone")
 
 with col2:
     st.subheader("🎛️ Controls & Transcript")

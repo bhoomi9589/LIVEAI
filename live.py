@@ -126,16 +126,46 @@ class GeminiLive:
         try:
             import cv2
             self.camera = cv2.VideoCapture(0)
+            
+            # Give camera time to initialize
+            import time
+            time.sleep(0.5)
+            
             if self.camera.isOpened():
-                self.camera_running = True
-                print("📷 Camera started")
-                # Start camera loop in background
-                import threading
-                threading.Thread(target=self._camera_loop, daemon=True).start()
+                # Test if we can actually read a frame
+                ret, test_frame = self.camera.read()
+                if ret:
+                    self.camera_running = True
+                    print("📷 Camera started successfully")
+                    # Start camera loop in background
+                    import threading
+                    threading.Thread(target=self._camera_loop, daemon=True).start()
+                else:
+                    print("⚠️ Camera opened but can't read frames - likely no hardware")
+                    self.camera.release()
+                    self.camera = None
+                    self._create_placeholder_frame()
             else:
-                print("❌ Failed to open camera")
+                print("⚠️ No camera hardware detected")
+                self.camera = None
+                self._create_placeholder_frame()
         except Exception as e:
             print(f"❌ Camera error: {e}")
+            self.camera = None
+            self._create_placeholder_frame()
+    
+    def _create_placeholder_frame(self):
+        """Create a placeholder image when no camera is available"""
+        try:
+            import numpy as np
+            # Create a simple placeholder image
+            placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+            # Add text-like pattern
+            placeholder[200:280, 150:490] = [40, 40, 60]
+            self.latest_frame = placeholder
+            print("📷 Created placeholder frame (no camera hardware)")
+        except Exception as e:
+            print(f"Error creating placeholder: {e}")
     
     def _camera_loop(self):
         """Continuously capture and send camera frames"""
