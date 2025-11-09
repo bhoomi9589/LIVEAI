@@ -69,13 +69,10 @@ class GeminiLive:
         try:
             while self.running and self.session:
                 try:
-                    print("📡 Calling session.receive()...")
                     # This will block until there's a response
                     async for response in self.session.receive():
                         if not self.running:
                             break
-                        
-                        print(f"📦 Received response: {type(response)}")
                         
                         # Process the response
                         if hasattr(response, 'text') and response.text:
@@ -84,7 +81,6 @@ class GeminiLive:
                                 self.ui_callback("text", response.text)
                         
                         if hasattr(response, 'server_content') and response.server_content:
-                            print(f"📦 Received server content")
                             if hasattr(response.server_content, 'model_turn'):
                                 model_turn = response.server_content.model_turn
                                 if hasattr(model_turn, 'parts'):
@@ -101,14 +97,16 @@ class GeminiLive:
                                     if self.ui_callback:
                                         self.ui_callback("tool", f"[🛠️ Tool Call: {part.tool_call.name}]")
                     
-                    # If receive() completes, wait a bit and try again
-                    print("⏸️ Receive completed, waiting...")
-                    await asyncio.sleep(0.5)
+                    # If receive() completes, wait before trying again
+                    await asyncio.sleep(1.0)
                 
                 except Exception as e:
                     if self.running:
-                        print(f"⚠️ Receive error: {e}")
-                        await asyncio.sleep(0.5)
+                        # Only log errors if session is still supposed to be running
+                        error_msg = str(e)
+                        if "1000" not in error_msg:  # Don't log normal WebSocket closures
+                            print(f"⚠️ Receive error: {e}")
+                        await asyncio.sleep(1.0)
                     else:
                         break
                         

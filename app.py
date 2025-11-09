@@ -71,6 +71,6 @@ draw_interface(
     transcript=st.session_state.transcript
 )
 
-# If the session is running, set up the callback for receiving responses
-if st.session_state.gemini_live.running:
+# Set up the callback for receiving responses (only sets the callback, doesn't block)
+if st.session_state.gemini_live.running and not st.session_state.gemini_live.ui_callback:
     st.session_state.gemini_live.receive_responses(ui_update_callback)
